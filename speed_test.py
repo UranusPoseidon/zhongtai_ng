@@ -3,8 +3,7 @@ from pymongo import MongoClient
 import psycopg2
 from geopy.distance import geodesic
 import re
-import csv
-import os
+import psycopg2
 
 # Connect to MongoDB
 mongo_client = MongoClient('mongodb://law.conetop.cn:27017/')
@@ -63,33 +62,49 @@ def ComputationSpeed():
         speeds.append(speed)
     return speeds
 
-def SaveAsCSV(oid,speeds):
-    path="oid_speed"
-    file_name=path+'/'+oid+'.csv'
-    os.makedirs(path)
-    with open(file_name,'w') as f:
-        csv_write=csv.writer(f)
-        csv_head=["road","speed","is_overspeed","start_longitudes&latitudes","end_longitudes&latitudes"]
-        csv_write.writerow(csv_head)
-    write_list=[]
-    for i in range(len(speeds)):
-        roa=0
-        if(i<len(roads)):
-            roa=roads[i]
-        else:
-            roa=None
-        write_list.append([roa,speeds[i],speeds[i]>50,[longitudes[i],latitudes[i]],[longitudes[i+1],latitudes[i+1]]])
-    if os.path.exists(file_name):
-        l=[]
-        with open(file_name,'a+') as f:
-            csv_write = csv.writer(f)
-            for k in write_list:
-                csv_write.writerow(k)
-    else:
-        print("文件未创建")
+def SaveToSQL(oid,speeds,dbname,user,password,host,port):
+    connection = psycopg2.connect(
+        dbname=dbname,
+        user=user,
+        password=password,
+        host=host,
+        port=port
+    )
     
-        
+    write_list = []
+    for i in range(len(speeds)):
+        roa = roads[i] if i < len(roads) else None
+        overspeed = speeds[i] > 50
+        write_list.append((
+            f"{oid}_{i}",  # id
+            roa,           # speed (assumed this is the speed reference, double-check this)
+            overspeed,     # is_overspeed
+            longitudes[i], latitudes[i],   # start_coordinates
+            longitudes[i+1], latitudes[i+1]  # end_coordinates
+        ))
 
+    cursor = connection.cursor()
+
+    try:
+        # Insert data
+        insert_query = '''
+        INSERT INTO road_speed (id, speed, is_overspeed, start_longitudes_latitudes, end_longitudes_latitudes) VALUES
+        (%s, %s, %s, POINT(%s, %s), POINT(%s, %s))
+        '''
+
+        for record in write_list:
+            cursor.execute(insert_query, record)
+
+        connection.commit()
+
+    except Exception as e:
+        print("An error occurred:", e)
+
+    finally:
+        # Close cursor and connection
+        cursor.close()
+        connection.close()
+        
 for document in mongo_collection.find():
     if document:
         times = document.get('timestamp', [])
@@ -100,7 +115,7 @@ for document in mongo_collection.find():
         id=str(document.get('_id'))
     speeds_list=ComputationSpeed()
     print(id)
-    SaveAsCSV(id,speeds_list)
+    SaveToSQL(id,speeds_list,'harbintrips','zhongtai','zt123!','law.conetop.cn','5432')
     times.clear()
     route_geom_tem.clear()
     roads.clear()
